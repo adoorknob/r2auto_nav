@@ -19,6 +19,8 @@ from sensor_msgs.msg import LaserScan
 import numpy as np
 
 
+anglefile = 'angledata.txt'
+counter = 0
 class Scanner(Node):
 
     def __init__(self):
@@ -40,7 +42,11 @@ class Scanner(Node):
 
         # log the info
         self.get_logger().info('Shortest distance at %i degrees' % lr2i)
-
+        global counter
+        if counter == 0:
+            np.savetxt(anglefile,laser_range)
+            self.get_logger().info('saved to file')
+            counter = 1
 
 def main(args=None):
     rclpy.init(args=args)

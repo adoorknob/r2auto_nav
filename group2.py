@@ -19,20 +19,31 @@ from geometry_msgs.msg import Twist
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
+
+#for plotting
+import tf2_ros
+from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
+import matplotlib.pyplot as plt
+from PIL import Image
+
 import numpy as np
 import math
 import cmath
 import time
+import scipy.stats
 
 # constants
 rotatechange = 0.1
 speedchange = 0.05
-occ_bins = [-1, 0, 100, 101]
+#occ_bins = [-1, 0, 100, 101]
+occ_bins = [-1, 0, 50, 100]
+map_bg_color = 1
 stop_distance = 0.25
 front_angle = 30
 front_angles = range(-front_angle,front_angle+1,1)
 scanfile = 'lidar.txt'
 mapfile = 'map.txt'
+occfile = 'occ.txt'
 
 # code from https://automaticaddison.com/how-to-convert-a-quaternion-into-euler-angles-in-python/
 def euler_from_quaternion(x, y, z, w):
@@ -86,7 +97,10 @@ class AutoNav(Node):
             self.occ_callback,
             qos_profile_sensor_data)
         self.occ_subscription  # prevent unused variable warning
+        self.tfBuffer = tf2_ros.Buffer()
+        self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self)
         self.occdata = np.array([])
+        self.occ_count = np.array([])
         
         # create subscription to track lidar
         self.scan_subscription = self.create_subscription(
@@ -107,21 +121,110 @@ class AutoNav(Node):
     def occ_callback(self, msg):
         # self.get_logger().info('In occ_callback')
         # create numpy array
-        msgdata = np.array(msg.data)
+        occdata = np.array(msg.data)
         # compute histogram to identify percent of bins with -1
-        # occ_counts = np.histogram(msgdata,occ_bins)
+        # self.occ_count = np.histogram(msgdata,occ_bins)
         # calculate total number of bins
-        # total_bins = msg.info.width * msg.info.height
+        iwidth = msg.info.width
+        iheight = msg.info.height
+        total_bins = iwidth * iheight
         # log the info
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
 
+        
+        # FROM r2occupancy2
+        #     TO REMOVE when actually running (only for checking robot movement)
+        # find transform to obtain base_link coordinates in the map frame
+        # lookup_transform(target_frame, source_frame, time)
+        occ_counts, edges, binnum = scipy.stats.binned_statistic(occdata, np.nan, statistic='count', bins=occ_bins)
+        try:
+            trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            self.get_logger().info('No transformation found')
+            return
+            
+        cur_pos = trans.transform.translation
+        cur_rot = trans.transform.rotation
+        # self.get_logger().info('Trans: %f, %f' % (cur_pos.x, cur_pos.y))
+        # convert quaternion to Euler angles
+        roll, pitch, yaw = euler_from_quaternion(cur_rot.x, cur_rot.y, cur_rot.z, cur_rot.w)
+        # self.get_logger().info('Rot-Yaw: R: %f D: %f' % (yaw, np.degrees(yaw)))
+
+        # get map resolution
+        map_res = msg.info.resolution
+        # get map origin struct has fields of x, y, and z
+        map_origin = msg.info.origin.position
+        # get map grid positions for x, y position
+        grid_x = round((cur_pos.x - map_origin.x) / map_res)
+        grid_y = round(((cur_pos.y - map_origin.y) / map_res))
+        # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
+
+        # binnum go from 1 to 3 so we can use uint8
+        # --> 0 = black, 1 = dark gray (unexplored), 2 = light gray (explored), 3 = white (obstacle)
+        # convert into 2D array using column order
+        odata = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
+        # set current robot location to 0
+        odata[grid_y][grid_x] = 0
+        odata[0][0] = 3
+        # self.get_logger().info('origin: %i, %i' % (round(map_origin.x),round(map_origin.y)))
+        # create image from 2D array using PIL
+        img = Image.fromarray(odata)
+        # find center of image
+        i_centerx = iwidth/2
+        i_centery = iheight/2
+        # find how much to shift the image to move grid_x and grid_y to center of image
+        shift_x = round(grid_x - i_centerx)
+        shift_y = round(grid_y - i_centery)
+        # self.get_logger().info('Shift Y: %i Shift X: %i' % (shift_y, shift_x))
+
+        # pad image to move robot position to the center
+        # adapted from https://note.nkmk.me/en/python-pillow-add-margin-expand-canvas/ 
+        left = 0
+        right = 0
+        top = 0
+        bottom = 0
+        if shift_x > 0:
+            # pad right margin
+            right = 2 * shift_x
+        else:
+            # pad left margin
+            left = 2 * (-shift_x)
+            
+        if shift_y > 0:
+            # pad bottom margin
+            bottom = 2 * shift_y
+        else:
+            # pad top margin
+            top = 2 * (-shift_y)
+            
+        # create new image
+        new_width = iwidth + right + left
+        new_height = iheight + top + bottom
+        img_transformed = Image.new(img.mode, (new_width, new_height), map_bg_color)
+        img_transformed.paste(img, (left, top))
+
+        # rotate by 90 degrees so that the forward direction is at the top of the image
+        rotated = img_transformed.rotate(np.degrees(yaw)-90, expand=True, fillcolor=map_bg_color)
+
+        # show the image using grayscale map
+        # plt.imshow(img, cmap='gray', origin='lower')
+        # plt.imshow(img_transformed, cmap='gray', origin='lower')
+        plt.imshow(rotated, cmap='gray', origin='lower')
+        plt.draw_all()
+        # pause to make sure the plot gets created
+        plt.pause(0.00000000001)
+        #END FROM r2occupancy2
+
         # make msgdata go from 0 instead of -1, reshape into 2D
-        oc2 = msgdata + 1
+        oc2 = occdata + 1
         # reshape to 2D array using column order
         # self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width,order='F'))
         self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width))
+        # self.occ_count = np.histogram2d(occdata,occ_bins)
+        self.occ_count = odata
         # print to file
         np.savetxt(mapfile, self.occdata)
+        np.savetxt(occfile, self.occ_count)
 
 
     def scan_callback(self, msg):
@@ -186,6 +289,11 @@ class AutoNav(Node):
         twist.angular.z = 0.0
         # stop the rotation
         self.publisher_.publish(twist)
+
+
+    # def pick_coords(self):
+        # using basic BFS to search for closest unmapped coord 
+        # TODO
 
 
     def pick_direction(self):
