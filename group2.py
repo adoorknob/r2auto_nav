@@ -19,6 +19,7 @@ from geometry_msgs.msg import Twist
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
+from collections import deque
 
 #for plotting
 import tf2_ros
@@ -31,6 +32,7 @@ import math
 import cmath
 import time
 import scipy.stats
+import heapq, math, random
 
 # constants
 rotatechange = 0.1
@@ -44,6 +46,8 @@ front_angles = range(-front_angle,front_angle+1,1)
 scanfile = 'lidar.txt'
 mapfile = 'map.txt'
 occfile = 'occ.txt'
+lookahead_distance = 0.24
+target_error = 0.15
 
 # code from https://automaticaddison.com/how-to-convert-a-quaternion-into-euler-angles-in-python/
 def euler_from_quaternion(x, y, z, w):
@@ -67,6 +71,129 @@ def euler_from_quaternion(x, y, z, w):
     yaw_z = math.atan2(t3, t4)
 
     return roll_x, pitch_y, yaw_z # in radians
+
+def heuristic(a, b):
+    return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+
+def astar(array, start, goal):
+    # array: occupancy data
+    neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
+    close_set = set()
+    came_from = {}
+    gscore = {start:0}
+    fscore = {start:heuristic(start, goal)}
+    oheap = []
+    heapq.heappush(oheap, (fscore[start], start))
+    while oheap:
+        current = heapq.heappop(oheap)[1] # pops top of heap, accesses second element ((row, col) coordinates of point)
+        if current == goal:
+            data = []
+            while current in came_from:
+                data.append(current)
+                current = came_from[current]
+            # data holds the path taken to the goal
+            data = data + [start]
+            data = data[::-1] # reverses order of elements so data returns a list [start, ..., goal] of the path taken
+            return data
+        # if goal has not been reached ...
+        close_set.add(current)
+        for i, j in neighbors:
+            neighbor = current[0] + i, current[1] + j
+            tentative_g_score = gscore[current] + heuristic(current, neighbor)
+            if 0 <= neighbor[0] < array.shape[0]: # checks if neighbour's y coordinate is within range
+                if 0 <= neighbor[1] < array.shape[1]:                # checks if neighbour's x coordinate is within range
+                    if array[neighbor[0]][neighbor[1]] == 1:
+                        continue
+                else:
+                    # array bound y walls
+                    continue
+            else:
+                # array bound x walls
+                continue
+            # skips to next neighbour if within image and not an obstacle
+            if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
+                # neighbour already seen and not a shorter path
+                continue
+            if  tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
+                # there exists a shorter path to neighbour, or neighbour has not been visited
+                # then save all your shit
+                came_from[neighbor] = current
+                gscore[neighbor] = tentative_g_score
+                fscore[neighbor] = tentative_g_score + heuristic(neighbor, goal)
+                heapq.heappush(oheap, (fscore[neighbor], neighbor))
+    # If no path to goal was found, return closest path to goal
+    if goal not in came_from:
+        closest_node = None
+        closest_dist = float('inf')
+        for node in close_set:
+            # runs through every node that has had a path calculated, returns the path to the node closest to the goal
+            dist = heuristic(node, goal)
+            if dist < closest_dist:
+                closest_node = node
+                closest_dist = dist
+        if closest_node is not None:
+            data = []
+            while closest_node in came_from:
+                data.append(closest_node)
+                closest_node = came_from[closest_node]
+            data = data + [start]
+            data = data[::-1]
+            return data
+    return False
+
+
+def bfs(matrix, x, y, exclude):
+#def bfs(matrix, x, y):
+    directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+    queue = deque([(x, y, 0)])  # (x, y, distance)
+    visited = set()
+
+    while queue:
+        curr_x, curr_y, distance = queue.popleft()
+
+        if matrix[curr_y][curr_x] < 0 and (curr_x, curr_y) not in exclude:
+        #if matrix[curr_y][curr_x] < 0 and (curr_x, curr_y):
+            # return (curr_x, curr_y), distance
+            return (curr_x, curr_y)
+
+        for dx, dy in directions:
+            new_x, new_y = curr_x + dx, curr_y + dy
+
+            if 0 <= new_x < len(matrix) and 0 <= new_y < len(matrix[0]) and (new_x, new_y) not in visited and (new_x, new_y) not in exclude and matrix[new_y][new_x] < 50:
+            # if 0 <= new_x < len(matrix) and 0 <= new_y < len(matrix[0]) and (new_x, new_y) not in visited and (new_x, new_y) and matrix[new_y][new_x] < 50:
+                visited.add((new_x, new_y))
+                queue.append((new_x, new_y, distance + 1))
+    return None
+
+def pure_pursuit(current_x, current_y, current_heading, path, index):
+    global lookahead_distance
+    closest_point = None
+    v = speed
+    for i in range(index,len(path)):
+        x = path[i][0]
+        y = path[i][1]
+        distance = math.hypot(current_x - x, current_y - y) # euclidean distance from point that robot is heading to
+        if lookahead_distance < distance:
+            closest_point = (x, y)
+            index = i
+            break
+    if closest_point is not None:
+        target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
+        desired_steering_angle = target_heading - current_heading
+    else:
+        # no point within lookahead_distance, just go towards path target
+        target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
+        desired_steering_angle = target_heading - current_heading
+        index = len(path)-1
+    if desired_steering_angle > math.pi:
+        desired_steering_angle -= 2 * math.pi
+    elif desired_steering_angle < -math.pi:
+        desired_steering_angle += 2 * math.pi
+    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
+        sign = 1 if desired_steering_angle > 0 else -1
+        desired_steering_angle = sign * math.pi/4
+        v = 0.0
+    return v,desired_steering_angle,index
 
 class AutoNav(Node):
 
@@ -101,6 +228,9 @@ class AutoNav(Node):
         self.tfListener = tf2_ros.TransformListener(self.tfBuffer, self)
         self.occdata = np.array([])
         self.occ_count = np.array([])
+
+        self.curr_x = 0
+        self.curr_y = 0
         
         # create subscription to track lidar
         self.scan_subscription = self.create_subscription(
@@ -111,6 +241,7 @@ class AutoNav(Node):
         self.scan_subscription  # prevent unused variable warning
         self.laser_range = np.array([])
 
+        self.in_exploration = False
 
     def odom_callback(self, msg):
         # self.get_logger().info('In odom_callback')
@@ -131,7 +262,6 @@ class AutoNav(Node):
         # log the info
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
 
-        
         # FROM r2occupancy2
         #     TO REMOVE when actually running (only for checking robot movement)
         # find transform to obtain base_link coordinates in the map frame
@@ -157,6 +287,8 @@ class AutoNav(Node):
         # get map grid positions for x, y position
         grid_x = round((cur_pos.x - map_origin.x) / map_res)
         grid_y = round(((cur_pos.y - map_origin.y) / map_res))
+        self.curr_x = grid_x
+        self.curr_y = grid_y
         # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
 
         # binnum go from 1 to 3 so we can use uint8
@@ -291,12 +423,70 @@ class AutoNav(Node):
         self.publisher_.publish(twist)
 
 
-    # def pick_coords(self):
-        # using basic BFS to search for closest unmapped coord 
-        # TODO
-
-
     def pick_direction(self):
+        '''
+        while True:
+            # check if necessary data exists
+            if not hasattr(self,'occdata') or not hasattr(self,'roll') or not hasattr(self,'laser_range'):
+                # hasattr checks if the class has the attribute
+                time.sleep(0.1)
+                continue
+            if not self.in_exploration:
+                # if robot has reached target already
+                if not target = bfs(self.occdata, self.curr_x, self.curr_y, exclude)
+                # check if there no longer exists accessible unmapped cells
+                # if map is done
+                    print('done mapping')
+                    sys.exit()
+                exclude = set()
+                while not path = astar(self.data, (self.curr_x, self.curr_y), target):
+                    # keep finding new target and path until path is found to target
+                    exclude.add(target)
+                    target = bfs(self.occdata, self.curr_x, self.curr_y, exclude)
+                    if not target:
+                        print('error')
+                        sys.exit()
+                self.in_exploration = True
+                print('found new target, otw now')
+            else:
+            '''
+        twist = Twist()
+        # exclude = set()
+        # check if necessary data exists
+        while not hasattr(self,'occdata') or not hasattr(self,'roll') or not hasattr(self,'laser_range'):
+            # hasattr checks if the class has the attribute
+            time.sleep(0.1)
+        # if robot has reached target already
+        target = bfs(self.occdata, self.curr_x, self.curr_y, exclude)
+        # target = bfs(self.occdata, self.curr_x, self.curr_y)
+        if not target:
+            # check if there no longer exists accessible unmapped cells
+            # if map is done
+            print('done mapping')
+            sys.exit()
+        path = astar(self.data, (self.curr_x, self.curr_y), target)
+        while not path:
+            # keep finding new target and path until path is found to target
+            # exclude.add(target)
+            target = bfs(self.occdata, self.curr_x, self.curr_y, exclude)
+            # target = bfs(self.occdata, self.curr_x, self.curr_y)
+            if not target:
+                print('error')
+                sys.exit()
+            path = astar(self.data, (self.curr_x, self.curr_y), target)
+        self.in_exploration = True
+        print('found new target, otw now')
+        v, w, self.i = pure_pursuit(self.curr_x, self.curr_y, self.yaw, path, self.i)
+        if abs(self.curr_x - target[1] < target_error) and abs(self.curr_y - target[0] < target_error):
+            self.in_exploration = False
+            print('reached target')
+            v = 0
+            w = 0
+        twist.linear.x = v
+        twist.angular.z = w
+        self.publisher_.publish(twist)
+
+        '''
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
             # use nanargmax as there are nan's in laser_range added to replace 0's
@@ -318,6 +508,7 @@ class AutoNav(Node):
         # reliably with this
         time.sleep(1)
         self.publisher_.publish(twist)
+        '''
 
 
     def stopbot(self):
