@@ -15,6 +15,7 @@
 
 # NOTE
 # occ_data: 0 = black, 1 = unexplored,  
+# yaw starts from positive x direction, anti-clockwise is positive, clockwise is negative
 
 import rclpy
 from rclpy.node import Node
@@ -55,9 +56,9 @@ mapfile = 'map.txt'
 occfile = 'occ.txt'
 lookahead_distance = 0.24
 target_error = 0.15
-speed = 0.08
-robot_r = 0.4 
-avoid_angle = math.pi/3 
+speed = 0.05
+robot_r = 0.4
+avoid_angle = math.pi/3
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -206,7 +207,7 @@ class MinimalSubscriber(Node):
         #
         # MAIN
 
-        to_print = odata
+        to_print = np.copy(odata)
         if hasattr(self, 'path'):
             for p in self.path:
                 to_print[p[1]][p[0]] = 0
@@ -408,18 +409,18 @@ class MinimalSubscriber(Node):
                 print('updated self.i to ' + str(i) + ': ' + str(self.i))
                 break
         '''
-        for i in range(len(path)):
+        for i in range(index, len(path)):
         #for i in range(self.i,len(path)):
             # looks for point in path that distance > lookahead to current position
-            x = path[i][1]
-            y = path[i][0]
+            x = path[i][0]
+            y = path[i][1]
             distance = math.hypot(current_x - x, current_y - y) # euclidean distance from point that robot is heading to
             if distance < closest_distance:
                 closest_point = (x, y)
                 closest_distance = distance
                 index = i
         
-        # print('closest point: ' + str(index) + ' with distance ' + str(closest_distance))
+        # print('closest point: ' + str(path[index]) + ' with distance ' + str(closest_distance))
         self.i = index
         if closest_point is not None:
             target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
@@ -429,6 +430,7 @@ class MinimalSubscriber(Node):
             target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
             desired_steering_angle = target_heading - current_heading
             self.i = len(path)-1
+        # desired_steering_angle += math.pi
         if desired_steering_angle > math.pi:
             desired_steering_angle -= 2 * math.pi
         elif desired_steering_angle < -math.pi:
@@ -462,7 +464,6 @@ class MinimalSubscriber(Node):
                 '''
                 if np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
                     self.integration()
-                time.sleep(0.1)
         except Exception as e:
             print(e)
         
@@ -495,7 +496,7 @@ class MinimalSubscriber(Node):
         # for i in range(45): # to account for funky lidar
             if self.laser_range[i] < robot_r:
                 print('OBJECT: avoiding front left')
-                v = 0.2
+                v = speed
                 w = -math.pi/4 
                 break
         if v == None:
@@ -503,7 +504,7 @@ class MinimalSubscriber(Node):
             # for i in range(225, 270):
                 if self.laser_range[i] < robot_r:
                     print('OBJECT: avoiding front right')
-                    v = 0.2
+                    v = speed
                     w = math.pi/4
                     break
         return v,w
@@ -614,6 +615,7 @@ class MinimalSubscriber(Node):
             self.publisher_.publish(twist)
         else:
             if self.has_target:
+                # self.path = self.astar()
                 v, w = self.pure_pursuit()
                 twist = Twist()
                 twist.linear.x = v
