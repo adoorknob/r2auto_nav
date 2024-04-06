@@ -52,7 +52,7 @@ speedchange = 0.05
 #occ_bins = [-1, 0, 100, 101]
 occ_bins = [-1, 0, 50, 100]
 map_bg_color = 1
-stop_distance = 0.30
+stop_distance = 0.20
 front_angle = 30
 front_angles = range(-front_angle,front_angle+1,1)
 left_front_angles = range(0, front_angle + 1, 1)
@@ -70,10 +70,10 @@ PID_ANG_VEL_SCALE_FACTOR = 0.8
 PID_DEST_ERROR_THRESHOLD = TURTLEBOT_WIDTH / 5
 PURGE_RADIUS = TURTLEBOT_WIDTH / 2
 # LINEAR_VEL = 0.08
-LINEAR_VEL = 0.18
+LINEAR_VEL = 0.08
 DIRS_WITH_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
 DIRS_WITHOUT_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0)]
-OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.75
+OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.60
 NUM_STEPS_BEFORE_REPLAN = 1000
 NUM_RETRIES = 5
 
@@ -83,6 +83,7 @@ max_angle_range = 360
 # max_angle_range = 270
 left_side_angles = range(round(max_angle_range / 4) - side_angle, round(max_angle_range / 4) + side_angle, 1)
 PID_THRESHOLD = TURTLEBOT_WIDTH * 2
+PID_ANG_VEL = 70
 
 def euclidean_dist(a, b):
     return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
@@ -285,7 +286,7 @@ class MinimalSubscriber(Node):
                                 and euclidean_dist((k, l), (i, j)) <= r:
                                 self.adjusted_map[k][l] = 3
 
-        if self.adjusted_map is not None:
+        if self.curr_pos_raw is not None:
             self.draw_map(self.adjusted_map)
 
         # make msgdata go from 0 instead of -1, reshape into 2D
@@ -295,6 +296,57 @@ class MinimalSubscriber(Node):
         self.occdata = np.uint8(oc2.reshape(self.iheight,self.iwidth))
         # self.occ_count = np.histogram2d(occdata,occ_bins)
         self.occ_count = odata
+
+    def rotatebot(self, rot_angle):
+        # self.get_logger().info('In rotatebot')
+        # create Twist object
+        twist = Twist()
+        
+        # get current yaw angle
+        current_yaw = self.yaw
+        # log the info
+        self.get_logger().info('Current: %f' % math.degrees(current_yaw))
+        # we are going to use complex numbers to avoid problems when the angles go from
+        # 360 to 0, or from -180 to 180
+        c_yaw = complex(math.cos(current_yaw),math.sin(current_yaw))
+        # calculate desired yaw
+        target_yaw = current_yaw + math.radians(rot_angle)
+        # convert to complex notation
+        c_target_yaw = complex(math.cos(target_yaw),math.sin(target_yaw))
+        self.get_logger().info('Desired: %f' % math.degrees(cmath.phase(c_target_yaw)))
+        # divide the two complex numbers to get the change in direction
+        c_change = c_target_yaw / c_yaw
+        # get the sign of the imaginary component to figure out which way we have to turn
+        c_change_dir = np.sign(c_change.imag)
+        # set linear speed to zero so the TurtleBot rotates on the spot
+        twist.linear.x = 0.0
+        # set the direction to rotate
+        twist.angular.z = c_change_dir * rotatechange
+        # start rotation
+        self.publisher_.publish(twist)
+
+        # we will use the c_dir_diff variable to see if we can stop rotating
+        c_dir_diff = c_change_dir
+        # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
+        # if the rotation direction was 1.0, then we will want to stop when the c_dir_diff
+        # becomes -1.0, and vice versa
+        while(c_change_dir * c_dir_diff > 0):
+            # allow the callback functions to run
+            rclpy.spin_once(self)
+            current_yaw = self.yaw
+            # convert the current yaw to complex form
+            c_yaw = complex(math.cos(current_yaw),math.sin(current_yaw))
+            # self.get_logger().info('Current Yaw: %f' % math.degrees(current_yaw))
+            # get difference in angle between current and target
+            c_change = c_target_yaw / c_yaw
+            # get the sign to see if we can stop
+            c_dir_diff = np.sign(c_change.imag)
+            # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
+
+        self.get_logger().info('End Yaw: %f' % math.degrees(current_yaw))
+        # set the rotation speed to 0
+        twist.angular.z = 0.0
+        # stop the rotation
 
     def find_non_obstacle(self, start):
         matrix = self.adjusted_map
@@ -440,7 +492,9 @@ class MinimalSubscriber(Node):
         return list(path)
 
     def stopbot(self):
+        print('STOPPing')
         t = Twist()
+        t.linear.x = 0.0
         self.publisher_.publish(t)
 
     def get_curr_pos(self):
@@ -448,9 +502,11 @@ class MinimalSubscriber(Node):
         
     def go_towards(self, dest):
         if self.curr_pos_raw is None or dest is None:
+            print('error 1')
             return
         curr = self.get_curr_pos()
         if curr is None:
+            print('error 2')
             return
         if euclidean_dist(curr, dest) > self.to_map_scale(PID_DEST_ERROR_THRESHOLD):
             dest_yaw = math.atan2(dest[1] - curr[1], dest[0] - curr[0])
@@ -468,6 +524,7 @@ class MinimalSubscriber(Node):
             twist.linear.x = LINEAR_VEL
             twist.angular.z = ang_delta * PID_ANG_VEL_SCALE_FACTOR
             self.publisher_.publish(twist)
+            print(f'published linear {twist.linear.x} and ang {twist.angular.z}')
         else:
             self.dest = None
             self.stopbot()
@@ -479,7 +536,7 @@ class MinimalSubscriber(Node):
             # trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time())
         except (LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().info('No transformation found')
-            print(f"Transform error: {e}")
+            # print(f"Transform error: {e}")
         return trans
 
     def purge_traversed_cells_from_path(self):
@@ -571,6 +628,9 @@ class MinimalSubscriber(Node):
         time.sleep(0.3)
         self.stopbot()
 
+    def pid_correct_path(self, error):
+        return error * PID_ANG_VEL_SCALE_FACTOR * PID_ANG_VEL/180 * math.pi
+
     def mover(self):
         try:
             while rclpy.ok() and self.retries < NUM_RETRIES:
@@ -612,7 +672,7 @@ class MinimalSubscriber(Node):
                     self.purge_traversed_cells_from_path()
 
                     if not self.path or self.steps_taken > NUM_STEPS_BEFORE_REPLAN:
-                        # print("REPLANNING")
+                        print("REPLANNING")
                         cell_to_explore = self.get_next_unknown_cell()
                         if cell_to_explore is None:
                             print("exploration complete")
@@ -652,6 +712,7 @@ class MinimalSubscriber(Node):
     def starter(self):
         try:
             while rclpy.ok():
+                rclpy.spin_once(self)
                 trans = self.get_transform()
                 if trans is not None:
                     cur_pos = trans.transform.translation
@@ -670,19 +731,23 @@ class MinimalSubscriber(Node):
                 if self.initial_distance is None:
                     self.initial_distance = min(self.laser_range[left_side_angles])
 
-                path_error = min(self.laser_range[left_side_angles]) - self.initial_distance
+                if self.laser_range is not None:
+                    path_error = min(self.laser_range[left_side_angles]) - self.initial_distance
+                    print(f'path error: {path_error}') 
 
-                if abs(path_error) < PID_THRESHOLD:
-                    t = Twist()
-                    t.linear.x = LINEAR_VEL
-                    t.angular.z = self.pid_correct_path(path_error)
-                    self.publisher_.publish(t)
-                else:
-                    time.sleep(0.5)
-                    self.stopbot()
-                    self.rotatebot(90)
-                    self.stopbot()
-                    return
+                    if abs(path_error) < PID_THRESHOLD and path_error != np.nan:
+                        t = Twist()
+                        t.linear.x = LINEAR_VEL
+                        t.angular.z = self.pid_correct_path(path_error/self.initial_distance)
+                        self.publisher_.publish(t)
+                        print('correcting path')
+                    else:
+                        print('rounding corner')
+                        time.sleep(0.5)
+                        self.stopbot()
+                        self.rotatebot(90)
+                        self.stopbot()
+                        return
 
         except Exception as e:
             print(e)
@@ -691,7 +756,7 @@ class MinimalSubscriber(Node):
 
     def decider(self):
         # starting: get initial position and turn into maze
-        self.starter()
+        # self.starter()
         # the killer maze mapping part :")
         self.mover()
         # end of maze, http call to server and move to door based on saved initial coords
