@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = 'auto_nav'
+package_name = 'autonomous_exploration'
 
 setup(
     name=package_name,
@@ -13,21 +13,14 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='nus',
-    maintainer_email='nus@todo.todo',
+    maintainer='abd',
+    maintainer_email='abd@todo.todo',
     description='TODO: Package description',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'r2mover = auto_nav.r2mover:main',
-            'r2moverotate = auto_nav.r2moverotate:main',
-            'r2scanner = auto_nav.r2scanner:main',
-            'r2occupancy = auto_nav.r2occupancy:main',
-            'r2occupancy2 = auto_nav.r2occupancy2:main',
-            'r2auto_nav = auto_nav.r2auto_nav:main',
-            'group2 = auto_nav.group2:main',
-            'check_angles = auto_nav.check_angles:main'
+            'control = autonomous_exploration.control:main'
         ],
     },
 )
