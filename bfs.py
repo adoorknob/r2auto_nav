@@ -640,6 +640,7 @@ class MinimalSubscriber(Node):
 
         if v != None:
             # if there are obstacles
+            print('obstacle avoidance')
             twist = Twist()
             twist.linear.x = v
             twist.angular.z = w
@@ -676,6 +677,7 @@ class MinimalSubscriber(Node):
                 self.has_target = True
             else:
                 # self.path = self.astar()
+                print('going towards target')
                 v, w = self.pure_pursuit()
                 twist = Twist()
                 twist.linear.x = v
