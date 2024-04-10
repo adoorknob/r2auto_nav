@@ -142,29 +142,21 @@ class MinimalSubscriber(Node):
     def funky_lidar_eqv_of(self, angle):
         return int(angle/360 * len(self.laser_range))
 
-    def get_trans(self):
+    def get_transform(self):
+        trans = None
         try:
             trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.01))
-        except (Exception, LookupException, ConnectivityException, ExtrapolationException) as e:
+            # trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+        except (LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().info('No transformation found')
-            return
-            
-        cur_pos = trans.transform.translation
-        cur_rot = trans.transform.rotation
-        # self.get_logger().info('Trans: %f, %f' % (cur_pos.x, cur_pos.y))
-        # convert quaternion to Euler angles
-        roll, pitch, yaw = euler_from_quaternion(cur_rot.x, cur_rot.y, cur_rot.z, cur_rot.w)
-        # self.get_logger().info('Rot-Yaw: R: %f D: %f' % (yaw, np.degrees(yaw)))
+            # print(f"Transform error: {e}")
+        return trans
 
         # get map resolution
         map_res = self.map_res
         # get map origin struct has fields of x, y, and z
         map_origin = self.map_origin
         # get map grid positions for x, y position
-        grid_x = round((cur_pos.x - map_origin.x) / map_res)
-        grid_y = round(((cur_pos.y - map_origin.y) / map_res))
-        self.curr_x = grid_x
-        self.curr_y = grid_y
         self.cur_pos = cur_pos
 
     def draw_map(self, draw_path):
@@ -624,10 +616,21 @@ class MinimalSubscriber(Node):
             self.stopbot()
             self.avoid(True)
         '''
-        if self.map_res is not None:
-            # updates robots curr position and rotation
-            print('getting trans information')
-            self.get_trans()
+        trans = self.get_transform()
+        if trans is not None:
+            cur_pos = trans.transform.translation
+            cur_rot = trans.transform.rotation
+            _, _, self.yaw = euler_from_quaternion(cur_rot.x, cur_rot.y, cur_rot.z, cur_rot.w)
+
+            grid_x = round((cur_pos.x - self.map_origin.x) / self.map_res)
+            grid_y = round(((cur_pos.y - self.map_origin.y) / self.map_res))
+            self.curr_x = grid_x
+            self.curr_y = grid_y
+            # This is the raw position, not scaled yet cos we might not have the scale factor yet
+            self.cur_pos = cur_pos
+
+        if self.cur_pos is None or self.map_origin is None or self.map_res is None:
+            continue
 
         if hasattr(self, 'curr_x'):
             self.draw_map(True)
