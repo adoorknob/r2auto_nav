@@ -14,8 +14,11 @@
 
 
 # NOTE
-# occ_data: 0 = black, 1 = unexplored,  
+# occ_data: 
+    # 0 = black, 1 = dark gray (unexplored), 2 = light gray (explored), 3 = white (obstacle)
 # yaw starts from positive x direction, anti-clockwise is positive, clockwise is negative
+# max linear = 0.22
+# max angular = 2.84
 
 import rclpy
 from rclpy.node import Node
@@ -49,7 +52,7 @@ speedchange = 0.05
 #occ_bins = [-1, 0, 100, 101]
 occ_bins = [-1, 0, 50, 100]
 map_bg_color = 1
-stop_distance = 0.50
+stop_distance = 0.30
 front_angle = 30
 front_angles = range(-front_angle,front_angle+1,1)
 left_front_angles = range(0, front_angle + 1, 1)
@@ -63,10 +66,11 @@ speed = 0.05
 robot_r = 0.4
 avoid_angle = math.pi/3
 TURTLEBOT_WIDTH = 0.3
-PID_ANG_VEL_SCALE_FACTOR = 1
+PID_ANG_VEL_SCALE_FACTOR = 0.8
 PID_DEST_ERROR_THRESHOLD = TURTLEBOT_WIDTH / 5
 PURGE_RADIUS = TURTLEBOT_WIDTH / 2
-LINEAR_VEL = 0.08
+# LINEAR_VEL = 0.08
+LINEAR_VEL = 0.18
 DIRS_WITH_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
 DIRS_WITHOUT_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0)]
 OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.75
@@ -244,7 +248,9 @@ class MinimalSubscriber(Node):
         # binnum go from 1 to 3 so we can use uint8
         # --> 0 = black, 1 = dark gray (unexplored), 2 = light gray (explored), 3 = white (obstacle)
         # convert into 2D array using column order
-        odata = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
+        self.iheight = msg.info.height
+        self.iwidth = msg.info.width
+        odata = np.uint8(binnum.reshape(self.iheight,self.iwidth))
 
         # get map resolution
         self.map_res = msg.info.resolution
@@ -252,10 +258,10 @@ class MinimalSubscriber(Node):
         self.map_origin = msg.info.origin.position
 
         if self.curr_pos_raw is not None:
-            grid_x = round(self.to_map_scale(self.curr_pos_raw[0] - self.map_origin.x))
-            grid_y = round(self.to_map_scale(self.curr_pos_raw[1] - self.map_origin.y))
+            self.grid_x = round(self.to_map_scale(self.curr_pos_raw[0] - self.map_origin.x))
+            self.grid_y = round(self.to_map_scale(self.curr_pos_raw[1] - self.map_origin.y))
             # set current robot location to 0
-            odata[grid_y][grid_x] = 0
+            odata[self.grid_y][self.grid_x] = 0
 
         r = int(self.to_map_scale(OBSTACLE_AVOIDANCE_RANGE))
         self.adjusted_map = np.copy(odata)
@@ -270,11 +276,14 @@ class MinimalSubscriber(Node):
                                 and euclidean_dist((k, l), (i, j)) <= r:
                                 self.adjusted_map[k][l] = 3
 
+        if self.curr_pos_raw is not None:
+            self.draw_map(self.adjusted_map)
+
         # make msgdata go from 0 instead of -1, reshape into 2D
         oc2 = occdata + 1
         # reshape to 2D array using column order
         # self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width,order='F'))
-        self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width))
+        self.occdata = np.uint8(oc2.reshape(self.iheight,self.iwidth))
         # self.occ_count = np.histogram2d(occdata,occ_bins)
         self.occ_count = odata
 
@@ -457,7 +466,8 @@ class MinimalSubscriber(Node):
     def get_transform(self):
         trans = None
         try:
-            trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+            trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.01))
+            # trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time())
         except (LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().info('No transformation found')
             print(f"Transform error: {e}")
@@ -470,6 +480,87 @@ class MinimalSubscriber(Node):
             if euclidean_dist(curr_pos, cell) > self.to_map_scale(PURGE_RADIUS):
                 new_path.append(cell)
         self.path = new_path
+
+    def draw_map(self, matrix):
+        # get map resolution
+        map_res = self.map_res
+        # get map origin struct has fields of x, y, and z
+        map_origin = self.map_origin
+
+        to_print = np.copy(matrix)
+        if hasattr(self, 'path'):
+            for p in self.path:
+                to_print[p[1]][p[0]] = 0
+
+        img = Image.fromarray(to_print)
+        # find center of image
+        i_centerx = self.iwidth/2
+        i_centery = self.iheight/2
+        # find how much to shift the image to move grid_x and grid_y to center of image
+        shift_x = round(self.grid_x - i_centerx)
+        shift_y = round(self.grid_y - i_centery)
+        # self.get_logger().info('Shift Y: %i Shift X: %i' % (shift_y, shift_x))
+
+        # pad image to move robot position to the center
+        # adapted from https://note.nkmk.me/en/python-pillow-add-margin-expand-canvas/ 
+        left = 0
+        right = 0
+        top = 0
+        bottom = 0
+        if shift_x > 0:
+            # pad right margin
+            right = 2 * shift_x
+        else:
+            # pad left margin
+            left = 2 * (-shift_x)
+            
+        if shift_y > 0:
+            # pad bottom margin
+            bottom = 2 * shift_y
+        else:
+            # pad top margin
+            top = 2 * (-shift_y)
+            
+        # create new image
+        new_width = self.iwidth + right + left
+        new_height = self.iheight + top + bottom
+        img_transformed = Image.new(img.mode, (new_width, new_height), map_bg_color)
+        img_transformed.paste(img, (left, top))
+
+        # rotate by 90 degrees so that the forward direction is at the top of the image
+        # rotated = img_transformed.rotate(np.degrees(yaw)-90, expand=True, fillcolor=map_bg_color)
+
+        # show the image using grayscale map
+        # plt.imshow(img, cmap='gray', origin='lower')
+        plt.imshow(img_transformed, cmap='gray', origin='lower')
+        # plt.imshow(rotated, cmap='gray', origin='lower')
+        plt.draw_all()
+        # pause to make sure the plot gets created
+        plt.pause(0.00000000001)
+
+    def move_away(self):
+        closest_angle = np.argmin(self.laser_range[front_angles])
+        dest_yaw = closest_angle / 360 * 2 * math.pi
+        # dest_yaw = closest_angle / 270 * 2 * math.pi
+        ang_delta = dest_yaw - self.yaw
+
+        # keep the magnitude of ang_delta less than pi
+        if ang_delta > math.pi:
+            ang_delta -= (2 * math.pi)
+        elif ang_delta < -math.pi:
+            ang_delta += (2 * math.pi)
+
+        # print(f"curr_yaw: {self.yaw}; dest_yaw: {dest_yaw}; ang_delta: {ang_delta}")
+
+        t = Twist()
+        t.angular.z = ang_delta * PID_ANG_VEL_SCALE_FACTOR 
+        self.publisher_.publish(t)
+        time.sleep(0.3)
+        t.linear.x = -0.08
+        t.angular.z = 0.0
+        self.publisher_.publish(t)
+        time.sleep(0.3)
+        self.stopbot()
 
     def mover(self):
         try:
@@ -488,11 +579,31 @@ class MinimalSubscriber(Node):
                 if self.curr_pos_raw is None or self.map_origin is None or self.map_res is None:
                     continue
                 
+                if self.laser_range.size != 0:
+                    # check distances in front of TurtleBot and find values less
+                    # than stop_distance
+                    lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
+                    # self.get_logger().info('Distances: %s' % str(lri))
+
+                    # if the list is not empty
+                    if(len(lri[0])>0):
+                        # stop moving
+                        print('avoiding')
+                        self.stopbot()
+                        time.sleep(0.1)
+                        self.move_away()
+                        cell_to_explore = self.get_next_unknown_cell()
+                        if cell_to_explore is None:
+                            print("exploration complete")
+                            return
+                        self.path = self.get_path_to(cell_to_explore)
+                        self.steps_taken = 0
+                        
                 try:
                     self.purge_traversed_cells_from_path()
 
                     if not self.path or self.steps_taken > NUM_STEPS_BEFORE_REPLAN:
-                        print("REPLANNING")
+                        # print("REPLANNING")
                         cell_to_explore = self.get_next_unknown_cell()
                         if cell_to_explore is None:
                             print("exploration complete")

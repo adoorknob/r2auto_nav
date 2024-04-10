@@ -56,9 +56,11 @@ mapfile = 'map.txt'
 occfile = 'occ.txt'
 lookahead_distance = 0.24
 target_error = 0.15
-speed = 0.05
-robot_r = 0.4
-avoid_angle = math.pi/3
+speed = 0.08
+avoid_speed = 0.02
+robot_r = 0.2
+robot_r_angle = math.pi/4
+NUM_RETRIES = 50000
 
 def euler_from_quaternion(x, y, z, w):
     """
@@ -105,6 +107,7 @@ class MinimalSubscriber(Node):
 
         self.curr_x = 0
         self.curr_y = 0
+        self.tries = 0
 
         self.odom_subscription = self.create_subscription(
             Odometry,
@@ -136,41 +139,13 @@ class MinimalSubscriber(Node):
         new_coordinates_y = coordinates[1]*self.map_res + self.map_origin.y 
         return (new_coordinates_x, new_coordinates_y)
 
-    def scan_callback(self, msg):
-        # self.get_logger().info('In scan_callback')
-        # create numpy array
-        self.laser_range = np.array(msg.ranges)
-        # print to file
-        # np.savetxt(scanfile, self.laser_range)
-        # replace 0's with nan
-        self.laser_range[self.laser_range==0] = np.nan
+    def funky_lidar_eqv_of(self, angle):
+        return int(angle/360 * len(self.laser_range))
 
-    def odom_callback(self, msg):
-        # self.get_logger().info('In odom_callback')
-        orientation_quat =  msg.pose.pose.orientation
-        self.roll, self.pitch, self.yaw = euler_from_quaternion(orientation_quat.x, orientation_quat.y, orientation_quat.z, orientation_quat.w)
-
-    def occ_callback(self, msg):
-        # self.get_logger().info('In occ_callback')
-        # create numpy array
-        occdata = np.array(msg.data)
-        # compute histogram to identify percent of bins with -1
-        # self.occ_count = np.histogram(msgdata,occ_bins)
-        # calculate total number of bins
-        iwidth = msg.info.width
-        iheight = msg.info.height
-        total_bins = iwidth * iheight
-        # log the info
-        # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
-
-        # FROM r2occupancy2
-        #     TO REMOVE when actually running (only for checking robot movement)
-        # find transform to obtain base_link coordinates in the map frame
-        # lookup_transform(target_frame, source_frame, time)
-        occ_counts, edges, binnum = scipy.stats.binned_statistic(occdata, np.nan, statistic='count', bins=occ_bins)
+    def get_trans(self):
         try:
-            trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time())
-        except (LookupException, ConnectivityException, ExtrapolationException) as e:
+            trans = self.tfBuffer.lookup_transform('map', 'base_link', rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=0.01))
+        except (Exception, LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().info('No transformation found')
             return
             
@@ -182,46 +157,34 @@ class MinimalSubscriber(Node):
         # self.get_logger().info('Rot-Yaw: R: %f D: %f' % (yaw, np.degrees(yaw)))
 
         # get map resolution
-        map_res = msg.info.resolution
+        map_res = self.map_res
         # get map origin struct has fields of x, y, and z
-        map_origin = msg.info.origin.position
+        map_origin = self.map_origin
         # get map grid positions for x, y position
         grid_x = round((cur_pos.x - map_origin.x) / map_res)
         grid_y = round(((cur_pos.y - map_origin.y) / map_res))
         self.curr_x = grid_x
         self.curr_y = grid_y
         self.cur_pos = cur_pos
-        self.map_res = map_res
-        self.map_origin = map_origin
 
-        # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
-
-        # binnum go from 1 to 3 so we can use uint8
-        # --> 0 = black, 1 = dark gray (unexplored), 2 = light gray (explored), 3 = white (obstacle)
-        # convert into 2D array using column order
-        odata = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
-        # set current robot location to 0
-        odata[grid_y][grid_x] = 0
-
-        #
-        #
-        # MAIN
-
-        to_print = np.copy(odata)
-        if hasattr(self, 'path'):
+    def draw_map(self, draw_path):
+        to_print = np.copy(self.occ_count)
+        to_print[self.curr_y][self.curr_x] = 0
+        iwidth = self.iwidth
+        iheight = self.iheight
+        
+        # check if path exists and want to draw path
+        if hasattr(self, 'path') and draw_path:
             for p in self.path:
                 to_print[p[1]][p[0]] = 0
 
-        # odata[0][0] = 3
-        # self.get_logger().info('origin: %i, %i' % (round(map_origin.x),round(map_origin.y)))
-        # create image from 2D array using PIL
         img = Image.fromarray(to_print)
         # find center of image
         i_centerx = iwidth/2
         i_centery = iheight/2
         # find how much to shift the image to move grid_x and grid_y to center of image
-        shift_x = round(grid_x - i_centerx)
-        shift_y = round(grid_y - i_centery)
+        shift_x = round(self.curr_x - i_centerx)
+        shift_y = round(self.curr_y - i_centery)
         # self.get_logger().info('Shift Y: %i Shift X: %i' % (shift_y, shift_x))
 
         # pad image to move robot position to the center
@@ -251,23 +214,65 @@ class MinimalSubscriber(Node):
         img_transformed.paste(img, (left, top))
 
         # rotate by 90 degrees so that the forward direction is at the top of the image
-        rotated = img_transformed.rotate(np.degrees(yaw)-90, expand=True, fillcolor=map_bg_color)
+        # rotated = img_transformed.rotate(np.degrees(yaw)-90, expand=True, fillcolor=map_bg_color)
 
         # show the image using grayscale map
         # plt.imshow(img, cmap='gray', origin='lower')
-        # plt.imshow(img_transformed, cmap='gray', origin='lower')
-        plt.imshow(rotated, cmap='gray', origin='lower')
+        plt.imshow(img_transformed, cmap='gray', origin='lower')
+        # plt.imshow(rotated, cmap='gray', origin='lower')
         plt.draw_all()
         # pause to make sure the plot gets created
         plt.pause(0.00000000001)
-        #END FROM r2occupancy2
 
-        # make msgdata go from 0 instead of -1, reshape into 2D
-        oc2 = occdata + 1
-        # reshape to 2D array using column order
-        # self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width,order='F'))
-        self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width))
-        # self.occ_count = np.histogram2d(occdata,occ_bins)
+    def scan_callback(self, msg):
+        # self.get_logger().info('In scan_callback')
+        # create numpy array
+        self.laser_range = np.array(msg.ranges)
+        # print to file
+        # np.savetxt(scanfile, self.laser_range)
+        # replace 0's with nan
+        self.laser_range[self.laser_range==0] = np.nan
+
+    def odom_callback(self, msg):
+        # self.get_logger().info('In odom_callback')
+        orientation_quat =  msg.pose.pose.orientation
+        self.roll, self.pitch, self.yaw = euler_from_quaternion(orientation_quat.x, orientation_quat.y, orientation_quat.z, orientation_quat.w)
+
+    def occ_callback(self, msg):
+        self.get_logger().info('In occ_callback')
+        # create numpy array
+        occdata = np.array(msg.data)
+        # compute histogram to identify percent of bins with -1
+        # self.occ_count = np.histogram(msgdata,occ_bins)
+        # calculate total number of bins
+        iwidth = msg.info.width
+        iheight = msg.info.height
+        total_bins = iwidth * iheight
+
+        self.iwidth = iwidth
+        self.iheight = iheight
+        # log the info
+        # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
+
+        # FROM r2occupancy2
+        #     TO REMOVE when actually running (only for checking robot movement)
+        # find transform to obtain base_link coordinates in the map frame
+        # lookup_transform(target_frame, source_frame, time)
+        occ_counts, edges, binnum = scipy.stats.binned_statistic(occdata, np.nan, statistic='count', bins=occ_bins)
+        # get map resolution
+        map_res = msg.info.resolution
+        # get map origin struct has fields of x, y, and z
+        map_origin = msg.info.origin.position
+        self.map_res = map_res
+        self.map_origin = map_origin
+
+        # self.get_logger().info('Grid Y: %i Grid X: %i' % (grid_y, grid_x))
+
+        # binnum go from 1 to 3 so we can use uint8
+        # --> 0 = black, 1 = dark gray (unexplored), 2 = light gray (explored), 3 = white (obstacle)
+        # convert into 2D array using column order
+        odata = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
+        # set current robot location to 0
         self.occ_count = odata
 
     def bfs(self):
@@ -340,10 +345,16 @@ class MinimalSubscriber(Node):
             for i, j in neighbors:
                 neighbor = current[0] + i, current[1] + j
                 tentative_g_score = gscore[current] + self.heuristic(current, neighbor)
+                '''
                 if 0 <= neighbor[0] < array.shape[0]: # checks if neighbour's y coordinate is within range
                     if 0 <= neighbor[1] < array.shape[1]:                # checks if neighbour's x coordinate is within range
                         # if array[neighbor[0]][neighbor[1]] == 1:
                         if array[neighbor[0]][neighbor[1]] == 3:
+                '''
+                if 0 <= neighbor[1] < array.shape[0]: # checks if neighbour's y coordinate is within range
+                    if 0 <= neighbor[0] < array.shape[1]:                # checks if neighbour's x coordinate is within range
+                        # if array[neighbor[0]][neighbor[1]] == 1:
+                        if array[neighbor[1]][neighbor[0]] == 3:
                             continue
                     else:
                         # array bound y walls
@@ -431,10 +442,13 @@ class MinimalSubscriber(Node):
             desired_steering_angle = target_heading - current_heading
             self.i = len(path)-1
         # desired_steering_angle += math.pi
+
+        # keeps angles within 360
         if desired_steering_angle > math.pi:
             desired_steering_angle -= 2 * math.pi
         elif desired_steering_angle < -math.pi:
             desired_steering_angle += 2 * math.pi
+
         if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
             sign = 1 if desired_steering_angle > 0 else -1
             desired_steering_angle = sign * math.pi/4
@@ -462,7 +476,7 @@ class MinimalSubscriber(Node):
                         # start moving
                         self.pick_direction()
                 '''
-                if np.size(self.occdata) != 0 and np.size(self.laser_range)!= 0:
+                if np.size(self.occ_count) != 0 and np.size(self.laser_range)!= 0:
                     self.integration()
         except Exception as e:
             print(e)
@@ -472,6 +486,7 @@ class MinimalSubscriber(Node):
             # stop moving
             self.stopbot()
 
+    '''        
     def avoid(self, left):
         if left:
             self.rotatebot(-rotatechange)
@@ -487,27 +502,27 @@ class MinimalSubscriber(Node):
         time.sleep(0.1)
         rclpy.spin_once(self)
         self.path = self.astar()
+    '''
 
     def object_avoidance(self):
         # print('in object avoidance')
         v = None
         w = None
-        for i in range(60):
-        # for i in range(45): # to account for funky lidar
+        for i in range(self.funky_lidar_eqv_of(60)):
             if self.laser_range[i] < robot_r:
                 print('OBJECT: avoiding front left')
-                v = speed
-                w = -math.pi/4 
+                v = avoid_speed
+                w = -robot_r_angle 
                 break
         if v == None:
-            for i in range(300,360):
-            # for i in range(225, 270):
+            for i in range(self.funky_lidar_eqv_of(300),self.funky_lidar_eqv_of(360)):
                 if self.laser_range[i] < robot_r:
                     print('OBJECT: avoiding front right')
-                    v = speed
-                    w = math.pi/4
+                    v = avoid_speed
+                    w = robot_r_angle
                     break
         return v,w
+    '''
     def pick_direction(self):
         # self.get_logger().info('In pick_direction')
         if self.laser_range.size != 0:
@@ -530,6 +545,7 @@ class MinimalSubscriber(Node):
         # reliably with this
         time.sleep(1)
         self.publisher_.publish(twist)
+    '''
 
     def stopbot(self):
         # self.get_logger().info('In stopbot')
@@ -593,6 +609,7 @@ class MinimalSubscriber(Node):
         self.publisher_.publish(twist)
 
     def integration(self):
+        print('in main')
         '''
         right = (self.laser_range[right_front_angles]<float(stop_distance)).nonzero()
         left = (self.laser_range[left_front_angles]<float(stop_distance)).nonzero()
@@ -607,29 +624,36 @@ class MinimalSubscriber(Node):
             self.stopbot()
             self.avoid(True)
         '''
+        if self.map_res is not None:
+            # updates robots curr position and rotation
+            print('getting trans information')
+            self.get_trans()
+
+        if hasattr(self, 'curr_x'):
+            self.draw_map(True)
+
         v, w = self.object_avoidance()
+        # checks if there are objects in the way
+
         if v != None:
+            # if there are obstacles
             twist = Twist()
             twist.linear.x = v
             twist.angular.z = w
             self.publisher_.publish(twist)
         else:
-            if self.has_target:
-                # self.path = self.astar()
-                v, w = self.pure_pursuit()
-                twist = Twist()
-                twist.linear.x = v
-                twist.angular.z = w
-                self.publisher_.publish(twist)
-                # if self.i == (len(self.path) - 1):
-                # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
-                if self.occ_count[self.target[1]][self.target[0]] != 1:
-                    self.has_target = False
-            else:
-                print('finding new target')
+            # if no obstacles
+            if not self.has_target or self.tries > NUM_RETRIES:
+                # if robot doesn't have target, or if it tries too many iterations
                 self.exclude = set()
+                if self.has_target:
+                    # has target but tried too many times
+                    print('exceeded num tries')
+                    self.exclude.add(self.target)
+                print('finding new target')
                 self.target = self.bfs()
                 if not self.target:
+                    # bfs only returns no target if all unexplored are unreachable
                     print('exploration complete')
                     sys.exit
                 # grid_target_x = round(((target[0] - map_origin.x) / map_res))
@@ -647,6 +671,18 @@ class MinimalSubscriber(Node):
                 '''
                 self.i = 0
                 self.has_target = True
+            else:
+                # self.path = self.astar()
+                v, w = self.pure_pursuit()
+                twist = Twist()
+                twist.linear.x = v
+                twist.angular.z = w
+                self.publisher_.publish(twist)
+                self.tries += 1
+                # if self.i == (len(self.path) - 1):
+                # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
+                if self.occ_count[self.target[1]][self.target[0]] != 1:
+                    self.has_target = False
 
     def path_is_blocked(self):
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
