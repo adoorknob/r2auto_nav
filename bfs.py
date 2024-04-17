@@ -492,7 +492,7 @@ class MinimalSubscriber(Node):
         # print('in object avoidance')
         v = None
         w = None
-        for i in range(60):
+        for i in range(int(60/360 * len(self.laser_range))):
         # for i in range(45): # to account for funky lidar
             if self.laser_range[i] < robot_r:
                 print('OBJECT: avoiding front left')
@@ -500,7 +500,7 @@ class MinimalSubscriber(Node):
                 w = -math.pi/4 
                 break
         if v == None:
-            for i in range(300,360):
+            for i in range(int(300/360 * len(self.laser_range)),int(len(self.laser_range))):
             # for i in range(225, 270):
                 if self.laser_range[i] < robot_r:
                     print('OBJECT: avoiding front right')

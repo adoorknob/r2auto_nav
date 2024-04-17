@@ -60,7 +60,7 @@ occfile = 'occ.txt'
 lookahead_distance = 0.24
 target_error = 0.15
 speed = 0.05
-robot_r = 0.4
+robot_r = 0.2
 avoid_angle = math.pi/3
 TURTLEBOT_WIDTH = 0.3
 PID_ANG_VEL_SCALE_FACTOR = 1
@@ -69,9 +69,9 @@ PURGE_RADIUS = TURTLEBOT_WIDTH / 2
 LINEAR_VEL = 0.08
 DIRS_WITH_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
 DIRS_WITHOUT_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0)]
-OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.75
+OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.50
 NUM_STEPS_BEFORE_REPLAN = 1000
-NUM_RETRIES = 5
+NUM_RETRIES = 100
 
 def euclidean_dist(a, b):
     return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
@@ -154,7 +154,7 @@ class MinimalSubscriber(Node):
             self.set_bool,
             qos_profile_sensor_data)
         self.start_subscription
-        self.self_exploring = False
+        self.start_exploring = False
 
         # create subscription to track occupancy
         self.occ_subscription = self.create_subscription(
@@ -288,7 +288,7 @@ class MinimalSubscriber(Node):
         # self.occ_count = np.histogram2d(occdata,occ_bins)
         self.occ_count = odata
 
-    def set_bool(self):
+    def set_bool(self, msg):
         self.start_exploring = True
 
     def find_non_obstacle(self, start):
@@ -484,9 +484,34 @@ class MinimalSubscriber(Node):
                 new_path.append(cell)
         self.path = new_path
 
+    def laser_range_conv(self, angle):
+        return int(angle / 360 * len(self.laser_range))
+
+    def object_avoidance(self):
+        # print('in object avoidance')
+        v = None
+        w = None
+        for i in range(self.laser_range_conv(60)):
+        # for i in range(45): # to account for funky lidar
+            if self.laser_range[i] < robot_r:
+                print('OBJECT: avoiding front left')
+                v = speed
+                w = -math.pi/4 
+                break
+        if v == None:
+            for i in range(self.laser_range_conv(300),self.laser_range_conv(360)):
+            # for i in range(225, 270):
+                if self.laser_range[i] < robot_r:
+                    print('OBJECT: avoiding front right')
+                    v = speed
+                    w = math.pi/4
+                    break
+        return v,w
+
     def mover(self):
         try:
-            while rclpy.ok() and self.retries < NUM_RETRIES:
+            while rclpy.ok():
+            # while rclpy.ok() and self.retries < NUM_RETRIES:
                 rclpy.spin_once(self)
 
                 trans = self.get_transform()
@@ -500,8 +525,19 @@ class MinimalSubscriber(Node):
 
                 if self.curr_pos_raw is None or self.map_origin is None or self.map_res is None:
                     continue
+
+                if self.laser_range is not None:
+                    v, w = self.object_avoidance()
+                    if v != None:
+                        twist = Twist()
+                        twist.linear.x = v
+                        twist.angular.z = w
+                        self.publisher_.publish(twist)
+                        time.sleep(0.2)
+                        continue
                 
                 try:
+
                     self.purge_traversed_cells_from_path()
 
                     if not self.path or self.steps_taken > NUM_STEPS_BEFORE_REPLAN:
@@ -535,7 +571,11 @@ class MinimalSubscriber(Node):
                 self.go_towards(self.dest)
                 """
             if self.retries >= NUM_RETRIES:
-                print(f"Failed {NUM_RETRIES} times. Giving up.")
+                print(f"Failed {NUM_RETRIES} times. Going forward.")
+                twist = Twist()
+                twist.linear.x = 0.05
+                twist.angular.z = 0
+                self.publisher_.publish(twist)
         except Exception as e:
             print(e)
         finally:
@@ -543,15 +583,15 @@ class MinimalSubscriber(Node):
     
     def starter(self):
         while rclpy.ok():
-            rclpy.spin_once()
+            rclpy.spin_once(self)
             if (self.start_exploring):
-                while True:
-                    print("ur mom")
                 break
+            else:
+                print('ur dad')
 
     def decider(self):
         # starting: get initial position and turn into maze
-        # self.starter()
+        self.starter()
         # the killer maze mapping part :")
         self.mover()
         # end of maze, http call to server and move to door based on saved initial coords
