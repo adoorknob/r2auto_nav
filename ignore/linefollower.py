@@ -34,7 +34,11 @@ speedchange = 0.05
 class Mover(Node):
     def init(self):
         super().init('mover')
+        # publish movement
         self.publisher_ = self.create_publisher(geometry_msgs.msg.Twist,'cmd_vel',10)
+        # publish to pc for astar
+        self.publisher_astar = self.create_publisher(geometry_msgs.msg.Twist,'start_astar',10)
+        
 
 # function to read keyboard input
     def readKey(self):
@@ -44,14 +48,23 @@ class Mover(Node):
             a=0
             while True:
                 time.sleep(0.05)
-                if gpio.input(right_out) == gpio.LOW and gpio.input(left_in) == gpio.LOW:
+
+                # FOR TESTING
+                # REMOVE
+                string = input("say smth: ") 
+                # if t-shape sensed: meaning if at doors 
+                # if gpio.input(right_out) == gpio.LOW and gpio.input(left_in) == gpio.LOW:
+                if True:
+                    # stop moving 
                     print('stop')
                     twist.angular.z = 0.0
                     twist.linear.x = 0.0
                     self.publisher_.publish(twist)
+                    # a is used to check t-junction for http call vs t-junction for bucket
                     a+=1
                     print('a=',a)
                     if a==1: 
+                        # TODO: figure out http call and how to get door response
                         url='http://172.20.10.12/openDoor'
                         data={"action": "openDoor", "parameters": {"robotId": 37}}
 
@@ -69,6 +82,7 @@ class Mover(Node):
                         self.publisher_.publish(twist)
                         time.sleep(5)
                     elif a==2:
+                        # TODO: change values to reflect servo values
                         print("I am throwing")
                         p.ChangeDutyCycle(2.5)
                         P.ChangeDutyCycle(7.5)
@@ -79,6 +93,13 @@ class Mover(Node):
                         p.stop()
                         P.stop()
                         gpio.cleanup()
+                        break
+                        #TODO: instead of break, turn around and go to previous t-junction
+                    # elif a == 3:
+                    elif string == hello:
+                        #TODO: actually check if this works out
+                        t = Twist()
+                        self.publisher_astar.publish(t)
                         break
 
                 # to turn move forward
