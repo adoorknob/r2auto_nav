@@ -22,16 +22,10 @@ left_in = 13
 right_in = 6
 
 servo_pin = 12
-# Servo=27
 # Set the pin as an output
 gpio.setup(servo_pin, gpio.OUT)
-# gpio.setup(Servo, gpio.OUT)
 # Initialise the servo to be controlled by pwm with 50 Hz frequency
 p = gpio.PWM(servo_pin, 50)
-# P=gpio.PWM(Servo,50)
-# Set servo to 90 degrees as it's starting position
-# p.start(7.5)
-# P.start(2.5)
 
 gpio.setup(left_in,gpio.IN)
 gpio.setup(right_in,gpio.IN)
@@ -39,7 +33,6 @@ gpio.setup(right_in,gpio.IN)
 rotatechange = 2.0
 slow_rotatechange = 1.1
 slow_rotate_delay = 1.5
-# speedchange = 0.15
 speedchange = 0.20
 LEFT = 1
 http_url='http://192.168.90.87/openDoor'
