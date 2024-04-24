@@ -546,17 +546,14 @@ class MinimalSubscriber(Node):
             rclpy.spin_once()
             if (self.start_exploring):
                 while True:
-                    print("ur mom")
+                    print("listening for call")
                 break
 
     def decider(self):
-        # starting: get initial position and turn into maze
-        # self.starter()
-        # the killer maze mapping part :")
+        # listens for RPi call to start astar
+        self.starter()
+        # starts astar
         self.mover()
-        # end of maze, http call to server and move to door based on saved initial coords
-
-        # in room, find bucket and activate servo
 
 def main(args=None):
     rclpy.init(args=args)
