@@ -42,6 +42,7 @@ slow_rotate_delay = 1.5
 # speedchange = 0.15
 speedchange = 0.20
 LEFT = 1
+http_url='http://192.168.90.87/openDoor'
 
 # code from https://automaticaddison.com/how-to-convert-a-quaternion-into-euler-angles-in-python/
 def euler_from_quaternion(x, y, z, w):
@@ -95,7 +96,7 @@ class Mover(Node):
                     if a==1: 
 
                         # first t-junction: makes call to door
-                        url='http://192.168.90.87/openDoor'
+                        url=http_url
                         data={"action": "openDoor", "parameters": {"robotId": 31}}
 
                         json_data=json.dumps(data)
