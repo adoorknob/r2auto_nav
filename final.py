@@ -315,9 +315,7 @@ class MinimalSubscriber(Node):
         x = self.curr_x
         y = self.curr_y
         exclude = self.exclude
-    #def bfs(matrix, x, y):
-        # print('currently in bfs')
-        # np.savetxt('matrix.txt', matrix)
+
         directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         queue = deque([(x, y, 0)])  # (x, y, distance)
         visited = set()
@@ -325,27 +323,17 @@ class MinimalSubscriber(Node):
 
         while queue:
             curr_x, curr_y, distance = queue.popleft()
-            # print('bfs check on (' + str(curr_x) + ', ' + str(curr_y) + '): ' + str(matrix[curr_y][curr_x]))
 
             if matrix[curr_y][curr_x] == 1 and (curr_x, curr_y) not in exclude:
-            # if matrix[curr_y][curr_x] < 0 and (curr_x, curr_y) not in exclude:
-            #if matrix[curr_y][curr_x] < 0 and (curr_x, curr_y):
-                # return (curr_x, curr_y), distance
-                # print('exiting bfs')
-                # print('target value: ' + str(matrix[curr_y][curr_x]))
                 return (curr_x, curr_y)
 
             for dx, dy in directions:
                 new_x, new_y = curr_x + dx, curr_y + dy
 
                 if 0 <= new_y < len(matrix) and 0 <= new_x < len(matrix[0]) and (new_x, new_y) not in visited and (new_x, new_y) not in exclude and matrix[new_y][new_x] < 3:
-                # if 0 <= new_x < len(matrix) and 0 <= new_y < len(matrix[0]) and (new_x, new_y) not in visited and (new_x, new_y) and matrix[new_y][new_x] < 50:
-                    # print('passed if statement, new_x = ' + str(new_x) + ', new_y = ' + str(new_y))
                         visited.add((new_x, new_y))
                         queue.append((new_x, new_y, distance + 1))
         return None
-
-
 
     def mover(self):
         print('astar called')
@@ -454,7 +442,6 @@ class MinimalSubscriber(Node):
         self.publisher_.publish(twist)
 
     def integration(self):
-        # while self.has_target and self.curr_x != self.target[0] and self.curr_y != self.target[1]:
         rclpy.spin_once(self)
         if self.laser_range.size != 0:
             lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
@@ -493,17 +480,12 @@ class MinimalSubscriber(Node):
                 self.rotatebot(rotangle)
 
             else:
-                self.move_forward(0.1)
-
-            # if self.i == (len(self.path) - 1):
-            # print('target data: ' + str(self.occ_count[self.target[1]][self.target[0]])) 
-                 
+                self.move_forward(0.1)        
 
     def find_target(self):
         self.get_logger().info('FINDING NEW TARGET')
         self.exclude = set()
         matrix = np.copy(self.occ_count)
-        # matrix = costmap(self.occ_count, self.occ_width, self.occ_height, self.map_res, expansion_size) #not sure if should costmap here or after find frontier cells
         np.savetxt('matrix.csv', matrix, delimiter = ',')
         self.get_logger().info('Find frontier cells')
         data = find_frontier_cells(matrix) #Find Frontiers
@@ -565,14 +547,8 @@ class MinimalSubscriber(Node):
                 print('ur dad')
 
     def decider(self):
-        # starting: get initial position and turn into maze
         self.starter()
-        # the killer maze mapping part :")
         self.mover()
-        # end of maze, http call to server and move to door based on saved initial coords
-
-        # in room, find bucket and activate servo
-            
 
 def main(args=None):
     rclpy.init(args=args)
