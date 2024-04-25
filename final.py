@@ -62,14 +62,14 @@ target_error = 0.15
 speed = 0.05
 robot_r = 0.2
 avoid_angle = math.pi/3
-TURTLEBOT_WIDTH = 0.3
+TURTLEBOT_WIDTH = 0.2
 PID_ANG_VEL_SCALE_FACTOR = 1
 PID_DEST_ERROR_THRESHOLD = TURTLEBOT_WIDTH / 5
 PURGE_RADIUS = TURTLEBOT_WIDTH / 2
 LINEAR_VEL = 0.08
 DIRS_WITH_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
 DIRS_WITHOUT_DIAGONALS = [(0,1),(0,-1),(1,0),(-1,0)]
-OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.50
+OBSTACLE_AVOIDANCE_RANGE = TURTLEBOT_WIDTH * 0.25
 NUM_STEPS_BEFORE_REPLAN = 1000
 NUM_RETRIES = 100
 
@@ -591,7 +591,7 @@ class MinimalSubscriber(Node):
 
     def decider(self):
         # starting: get initial position and turn into maze
-        self.starter()
+        # self.starter()
         # the killer maze mapping part :")
         self.mover()
         # end of maze, http call to server and move to door based on saved initial coords

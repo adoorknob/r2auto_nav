@@ -451,7 +451,7 @@ class AutoNav(Node):
             else:
             '''
         twist = Twist()
-        # exclude = set()
+        exclude = set()
         # check if necessary data exists
         while not hasattr(self,'occdata') or not hasattr(self,'roll') or not hasattr(self,'laser_range'):
             # hasattr checks if the class has the attribute

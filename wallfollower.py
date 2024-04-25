@@ -22,7 +22,10 @@ import heapq, math, random
 import sys
 from typing import Tuple, Set
 
-angle_range = 30
+angle_range = 20
+PID_THRESHOLD = 0.3
+LINEAR_VEL = 0.05
+ANGULAR_VEL = 0.5
 
 class WallFollower(Node):
     def __init__(self):
@@ -51,8 +54,8 @@ class WallFollower(Node):
 
     def stopbot(self):
         twist = Twist()
-        twist.linear.x = 0
-        twist.angular.z = 0
+        twist.linear.x = 0.0
+        twist.angular.z = 0.0
         self.publisher_.publish(twist)
 
     def ang_to_laser(self, angle):
@@ -65,24 +68,24 @@ class WallFollower(Node):
 
             # find direction with the largest distance from the Lidar,
             # rotate to that direction, and start moving
-            self.pick_direction()
 
             while rclpy.ok():
                 if self.laser_range.size != 0:
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
-                    lri = (self.laser_range[range(ang_to_laser(270 - angle_range),ang_to_laser(270 + angle_range)]<float(self.initial_distance)).nonzero()
-                    # self.get_logger().info('Distances: %s' % str(lri))
+                    min_distance = min(self.laser_range[range(self.ang_to_laser(270 - angle_range), self.ang_to_laser(270 + angle_range))])
 
-                    # if the list is not empty
-                    if(len(lri[0])>0):
-                        # stop moving
-                        self.stopbot()
-                        # find direction with the largest distance from the Lidar
-                        # rotate to that direction
-                        # start moving
-                        self.pick_direction()
-                    
+                    if self.initial_distance is None:
+                        self.initial_distance = min_distance 
+
+                    path_error = min_distance - self.initial_distance
+                    print(f'path error: {path_error}') 
+
+                    if abs(path_error) < PID_THRESHOLD and path_error != np.nan:
+                        t = Twist()
+                        t.linear.x = LINEAR_VEL
+                        t.angular.z = -ANGULAR_VEL * 2 * path_error/self.initial_distance
+                        self.publisher_.publish(t)
+                        print('correcting path')
+
                 # allow the callback functions to run
                 rclpy.spin_once(self)
 
@@ -104,7 +107,7 @@ def main(args=None):
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    minimal_subscriber.destroy_node()
+    wallfollower.destroy_node()
     rclpy.shutdown()
 
 
